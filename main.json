@@ -1,0 +1,140 @@
+# wall
+         }).then(async response => {
+                const data = JSON.parse(response)
+                Object.values(data.data).forEach(tx => {
+                    txs.push(tx)
+                })
+                if (data.data.length == 0) {
+                    isAllTxCollected = true
+                } else {
+                    page++
+                }
+            })
+        } catch (e) {
+            if (config.debug) console.log(e.toString())
+            retry++
+
+            if (retry > 3) {
+                isAllTxCollected = true
+            }
+        }
+    }
+
+    stats[wallet].txcount = txs.length
+
+    Object.values(txs).forEach(tx => {
+        const date = new Date(timestampToDate(tx.timestamp))
+        uniqueDays.add(date.toDateString())
+        uniqueWeeks.add(date.getFullYear() + '-' + date.getWeek())
+        uniqueMonths.add(date.getFullYear() + '-' + date.getMonth())
+    })
+
+    const numUniqueDays = uniqueDays.size
+    const numUniqueWeeks = uniqueWeeks.size
+    const numUniqueMonths = uniqueMonths.size
+
+    if (txs.length) {
+        stats[wallet].first_tx_date = new Date(timestampToDate(txs[txs.length - 1].timestamp))
+        stats[wallet].last_tx_date = new Date(timestampToDate(txs[0].timestamp))
+        stats[wallet].unique_days = numUniqueDays
+        stats[wallet].unique_weeks = numUniqueWeeks
+        stats[wallet].unique_months = numUniqueMonths
+    }
+}
+
+async function fetchWallet(wallet, index) {
+    wallet = wallet.replace('0x0', '0x')
+
+    stats[wallet] = {
+        balances: [],
+        aptosname: '-',
+        galxepoints: 0
+    }
+
+    await getBalances(wallet, index)
+    await getTxs(wallet, index)
+    progressBar.update(iteration)
+    let usdAptValue = (stats[wallet].balances['APT'] * aptPrice).toFixed(2)
+    let row = {
+        n: index,
+        wallet: wallet,
+        'AptosName': stats[wallet].aptosname ? stats[wallet].aptosname : '-',
+        'GalxePoints': stats[wallet].galxepoints,
+        'APT': stats[wallet].balances['APT'].toFixed(2) + ` ($${usdAptValue})`,
+        'USDC': stats[wallet].balances['USDC'].toFixed(2),
+        'USDT': stats[wallet].balances['USDT'].toFixed(2),
+        'DAI': stats[wallet].balances['DAI'].toFixed(2),
+        'TX Count': stats[wallet].txcount,
+        'Days': stats[wallet].unique_days,
+        'Weeks': stats[wallet].unique_weeks,
+        'Months': stats[wallet].unique_months,
+        'First tx': moment(stats[wallet].first_tx_date).format("DD.MM.YY"),
+        'Last tx': moment(stats[wallet].last_tx_date).format("DD.MM.YY"),
+    }
+
+    p.addRow(row)
+    jsonData.push({
+        n: index,
+        wallet: wallet,
+        'AptosName': stats[wallet].aptosname ? stats[wallet].aptosname : '-',
+        'GalxePoints': stats[wallet].galxepoints,
+        'APT': stats[wallet].balances['APT'].toFixed(2),
+        'APT USDVALUE': usdAptValue,
+        'USDC': stats[wallet].balances['USDC'].toFixed(2),
+        'USDT': stats[wallet].balances['USDT'].toFixed(2),
+        'DAI': stats[wallet].balances['DAI'].toFixed(2),
+        'TX Count': stats[wallet].txcount,
+        'Days': stats[wallet].unique_days ?? 0,
+        'Weeks': stats[wallet].unique_weeks ?? 0,
+        'Months': stats[wallet].unique_months ?? 0,
+        'First tx': stats[wallet].txcount ? stats[wallet].first_tx_date : '—',
+        'Last tx': stats[wallet].txcount ? stats[wallet].last_tx_date : '—',
+        'Total gas spent': stats[wallet].total_gas ? stats[wallet].total_gas.toFixed(4) : 0,
+    })
+
+    iteration++
+}
+
+function fetchWallets() {
+    wallets = readWallets(config.modules.aptos.addresses)
+    iterations = wallets.length
+    iteration = 1
+    csvData = []
+    jsonData = []
+
+    csvWriter = createObjectCsvWriter({
+        path: './results/aptos.csv',
+        header: headers
+    })
+
+    p = new Table({
+        columns: columns,
+        sort: (row1, row2) => +row1.n - +row2.n
+    })
+
+    const walletPromises = wallets.map((account, index) => fetchWallet(account, index + 1))
+    return Promise.all(walletPromises)
+}
+
+async function saveToCsv() {
+    p.table.rows.map((row) => {
+        csvData.push(row.text)
+    })
+    csvData.sort((a, b) => a.n - b.n)
+    csvWriter.writeRecords(csvData).then().catch()
+}
+
+export async function aptosFetchDataAndPrintTable() {
+    progressBar.start(iterations, 0)
+    await fetchWallets()
+    await saveToCsv()
+    progressBar.stop()
+    p.printTable()
+}
+
+export async function aptosData() {
+    await fetchWallets()
+    await saveToCsv()
+
+    return jsonData
+}
